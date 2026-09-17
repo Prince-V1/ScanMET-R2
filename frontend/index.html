@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ScanMET — Label Compliance Scanner</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#eee8ff;font-family:Inter,Arial,sans-serif;color:#111;padding:18px}
+.app{max-width:980px;margin:auto}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}
+.logo{font-size:29px;font-weight:900}
+.nav{display:flex;gap:7px;flex-wrap:wrap}
+.card{background:#fff;padding:22px;border:2px solid #111;border-radius:20px;box-shadow:5px 5px #111;margin-bottom:18px}
+.hero{font-size:39px;line-height:1.05;font-weight:900;max-width:650px}
+.sub{color:#555}
+.upload{padding:24px;border:2px dashed #777;border-radius:16px;text-align:center;margin:18px 0}
+.btn{border:2px solid #111;background:#a88cff;padding:11px 16px;border-radius:11px;font-weight:800;cursor:pointer}
+.btn:hover{transform:translateY(-1px)}
+.btn.dark{background:#111;color:white}
+.btn.danger{background:#fff;border-color:#b91c1c;color:#b91c1c}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:11px}
+.field{padding:14px;background:#f5f2ff;border-radius:13px;border:1px solid #ddd}
+.ok{color:#15803d}.warn{color:#c2410c}
+pre{white-space:pre-wrap;max-height:260px;overflow:auto;background:#111;color:#fff;padding:15px;border-radius:12px}
+.hidden{display:none!important}
+.row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.small{font-size:13px;color:#666}
+.scan-item{margin:9px 0;padding:14px;background:#f7f7f7;border-radius:13px;border:1px solid #ddd;cursor:pointer}
+.scan-item:hover{border-color:#111}
+.badge{display:inline-block;padding:5px 8px;border-radius:999px;background:#eee;font-size:12px;font-weight:800}
+.badge.ok{background:#dcfce7}.badge.warn{background:#ffedd5}
+.issue{padding:9px 0;border-bottom:1px solid #eee}
+.notice{padding:12px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa}
+#preview{max-width:100%;max-height:280px;border-radius:12px;margin-top:12px}
+@media(max-width:650px){
+ body{padding:12px}.hero{font-size:30px}.grid{grid-template-columns:1fr}
+ .card{padding:16px}.logo{font-size:24px}
+}
+</style>
+</head>
+<body>
+<main class="app">
+
+<header class="top">
+  <div class="logo">◉ ScanMET</div>
+  <div class="nav">
+    <button class="btn" onclick="showHome()">Home</button>
+    <button class="btn" onclick="loadHistory()">History</button>
+  </div>
+</header>
+
+<section id="home" class="card">
+  <div class="hero">Scan now.<br>Check anytime.</div>
+  <p class="sub">AI-assisted packaged-label compliance screening with OCR + rule-based checks.</p>
+
+  <div class="upload">
+    <input id="file" type="file" accept="image/*" onchange="previewImage()">
+    <div><img id="preview" class="hidden" alt="Label preview"></div>
+    <p>Select a clear product-label image.</p>
+    <button id="scanBtn" class="btn dark" onclick="scan()">Scan Product</button>
+  </div>
+
+  <div class="notice small">
+    Prototype screening only. A “COMPLIANT” result means the configured checks were detected;
+    it is not a legal certification.
+  </div>
+</section>
+
+<section id="result" class="card hidden"></section>
+
+<section id="historyBox" class="card hidden">
+  <div class="row">
+    <h2>Saved Scan Results</h2>
+    <button class="btn danger" onclick="clearHistory()">Clear History</button>
+  </div>
+  <p class="small">Saved by the backend. Tap any scan to reopen its complete result.</p>
+  <div id="historyList"></div>
+</section>
+
+<script>
+// For deployment, replace this with your public backend URL.
+// Example: https://your-backend.example.com
+const API = localStorage.getItem("SCANMET_API") || "http://127.0.0.1:8000";
+let last = null;
+
+const $ = id => document.getElementById(id);
+
+function escapeHtml(value){
+  return String(value ?? "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  }[c]));
+}
+
+function previewImage(){
+  const f=$("file").files[0], img=$("preview");
+  if(!f){img.classList.add("hidden");return}
+  img.src=URL.createObjectURL(f);
+  img.classList.remove("hidden");
+}
+
+function showHome(){
+  $("historyBox").classList.add("hidden");
+  $("home").classList.remove("hidden");
+}
+
+async function scan(){
+  const f=$("file").files[0];
+  if(!f)return alert("Select a label image first.");
+
+  $("historyBox").classList.add("hidden");
+  $("result").classList.remove("hidden");
+  $("result").innerHTML="<h2>Scanning...</h2><p>Google OCR + rule checks are running.</p>";
+  $("scanBtn").disabled=true;
+
+  try{
+    const body=new FormData();
+    body.append("file",f);
+    const r=await fetch(API+"/scan",{method:"POST",body});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.detail || "Scan failed.");
+    last=data;
+    localStorage.setItem("SCANMET_LAST_RESULT",JSON.stringify(data));
+    showResult(data);
+  }catch(e){
+    $("result").innerHTML=`<h2 class="warn">Scan failed</h2><p>${escapeHtml(e.message)}</p>
+      <p class="small">Check that the backend is running and Google Vision OCR is configured.</p>`;
+  }finally{
+    $("scanBtn").disabled=false;
+  }
+}
+
+function showResult(d){
+  const cls=d.status==="COMPLIANT"?"ok":"warn";
+  let html=`<div class="row"><div><h2 class="${cls}">${escapeHtml(d.status)}</h2>
+    <p class="small">Scan #${escapeHtml(d.id)} • ${escapeHtml(d.scanned_at||"")}</p></div>
+    <button class="btn dark" onclick="pdf()">Export PDF</button></div>`;
+
+  html+=`<h3>Detected Fields</h3><div class="grid">`;
+  for(const k in d.fields){
+    const value=d.fields[k];
+    html+=`<div class="field"><b>${escapeHtml(k)}</b><br>${escapeHtml(value)}</div>`;
+  }
+  html+="</div>";
+
+  html+="<h3>Rules & Issues</h3>";
+  if(d.issues?.length){
+    html+=d.issues.map(x=>`<div class="issue">⚠️ ${escapeHtml(x)}</div>`).join("");
+  }else{
+    html+=`<p class="ok">✓ All configured prototype rules were detected.</p>`;
+  }
+
+  html+="<h3>Correction Suggestions</h3>";
+  if(d.suggestions?.length){
+    html+=d.suggestions.map(x=>`<div class="issue">→ ${escapeHtml(x)}</div>`).join("");
+  }else html+="<p>No correction suggestions.</p>";
+
+  html+=`<h3>OCR Text</h3><pre>${escapeHtml(d.ocr_text||"No text detected")}</pre>`;
+  $("result").innerHTML=html;
+}
+
+async function loadHistory(){
+  $("home").classList.add("hidden");
+  $("result").classList.add("hidden");
+  $("historyBox").classList.remove("hidden");
+  $("historyList").innerHTML="<p>Loading saved scans...</p>";
+
+  try{
+    const r=await fetch(API+"/history?limit=50");
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||"Could not load history.");
+    if(!d.length){
+      $("historyList").innerHTML="<p>No saved scans yet.</p>";
+      return;
+    }
+    $("historyList").innerHTML=d.map(x=>{
+      const cls=x.status==="COMPLIANT"?"ok":"warn";
+      return `<div class="scan-item" onclick="openHistory(${x.id})">
+        <div class="row"><b>#${escapeHtml(x.id)} ${escapeHtml(x.filename||"scan")}</b>
+        <span class="badge ${cls}">${escapeHtml(x.status)}</span></div>
+        <div class="small">${escapeHtml(x.scanned_at||"")}</div>
+        <div class="small">${x.issues?.length||0} issue(s) • Tap to view complete result</div>
+      </div>`;
+    }).join("");
+  }catch(e){
+    $("historyList").innerHTML=`<p class="warn">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function openHistory(id){
+  try{
+    const r=await fetch(API+"/history/"+id);
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||"Could not open scan.");
+    last=d;
+    localStorage.setItem("SCANMET_LAST_RESULT",JSON.stringify(d));
+    $("historyBox").classList.add("hidden");
+    $("result").classList.remove("hidden");
+    showResult(d);
+  }catch(e){alert(e.message)}
+}
+
+async function clearHistory(){
+  if(!confirm("Delete all saved scan results?"))return;
+  try{
+    const r=await fetch(API+"/history",{method:"DELETE"});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||"Could not clear history.");
+    loadHistory();
+  }catch(e){alert(e.message)}
+}
+
+async function pdf(){
+  if(!last)return alert("No result available.");
+  try{
+    const r=await fetch(API+"/report",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(last)
+    });
+    if(!r.ok){
+      const d=await r.json().catch(()=>({}));
+      throw new Error(d.detail||"PDF generation failed.");
+    }
+    const b=await r.blob();
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(b);
+    a.download=`ScanMET_Report_${last.id||"scan"}.pdf`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }catch(e){alert(e.message)}
+}
+
+// Optional: set the backend URL from the browser console:
+// localStorage.setItem("SCANMET_API","https://your-backend-url")
+</script>
+</main>
+</body>
+</html>
